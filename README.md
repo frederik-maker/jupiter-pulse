@@ -1,131 +1,87 @@
 # Jupiter Pulse
 
-**AI-powered portfolio monitoring and auto-hedging agent built on Jupiter APIs.**
+AI agent that monitors your Solana portfolio and auto-hedges when things go south. Uses multiple Jupiter APIs chained together — Price API spots the drop, Tokens API checks if it's real selling or just noise, then it acts through Swap V2 / Trigger / Perps depending on how bad it looks.
 
-Jupiter Pulse watches your Solana portfolio in real-time, detects genuine market dumps (vs noise/wash trading), and automatically hedges your positions using Jupiter's swap, limit order, and perpetuals infrastructure.
-
-## How It Works
+## What it does
 
 ```
-Price API (detect drops) → Tokens API (verify organic selling) → Strategy Engine (decide action) → Swap V2 / Trigger / Perps (execute hedge)
+Price API (spot the drop) → Tokens API (real dump or noise?) → Strategy Engine → Swap V2 / Trigger / Perps (hedge)
 ```
 
-1. **Price Monitoring** — Polls Jupiter Price API every 10s, tracks volatility and price changes across your portfolio
-2. **Organic Analysis** — When a token drops, queries the Tokens API for organic vs bot trading volume to determine if it's a real dump
-3. **Strategy Decisions** — Rule-based engine with 5 escalation levels:
-   - Stable → Hold
-   - Minor dip + noise → Safety limit sell
-   - Moderate dip + organic selling → Reduce position
-   - Large position + high volatility → OCO order (TP/SL)
-   - Confirmed dump → Emergency swap to USDC
-4. **Execution** — Uses Swap V2 managed execution for immediate swaps, Trigger API for limit orders, and can interface with Perps via CLI
+The agent runs in a loop, checking prices every 10 seconds. When a token starts dropping, it pulls organic trading data from the Tokens API to figure out if real people are selling or if it's just bot wash trading. Based on that signal + the size of your position, it picks one of five responses:
 
-## APIs Used
+- **Stable** → do nothing
+- **Small dip, looks like noise** → set a safety limit sell below current price
+- **Moderate dip, real selling** → reduce the position
+- **Big position, high volatility** → set a take-profit/stop-loss (OCO order)
+- **Confirmed dump** → swap everything to USDC immediately
 
-| API | Purpose |
-|-----|---------|
-| **Price API** (`/price/v3`) | Real-time USD pricing, 24h change, liquidity data |
-| **Tokens API** (`/tokens/v2`) | Organic volume analysis, holder counts, trading metrics |
-| **Swap V2** (`/swap/v2/order` + `/execute`) | Managed swap execution with best-price routing |
-| **Trigger API** (`/trigger/v2`) | Limit orders, OCO (TP/SL), OTOCO |
-| **Portfolio API** (`/portfolio/v1`) | Wallet position tracking |
-| **Perps** (via CLI) | Leveraged short positions for hedging |
+## APIs used
 
-## Quick Start
+| API | What for |
+|-----|----------|
+| Price API (`/price/v3`) | Real-time prices, 24h change, liquidity |
+| Tokens API (`/tokens/v2`) | Organic volume, holder counts, trading metrics |
+| Swap V2 (`/swap/v2/order` + `/execute`) | Actually executing swaps with managed landing |
+| Trigger (`/trigger/v2`) | Limit orders and OCO (TP/SL) |
+| Portfolio (`/portfolio/v1`) | Reading wallet positions |
+| Perps (via CLI) | Short positions for hedging |
+
+## Try it
 
 ```bash
-# Clone and install
-git clone https://github.com/frederikbussler/jupiter-pulse.git
+git clone https://github.com/frederik-maker/jupiter-pulse.git
 cd jupiter-pulse
 npm install
 
-# Run the demo (no wallet needed — uses live API data)
-npm run demo
+# Run the demo — no wallet needed, uses live API data
+JUPITER_API_KEY=your_key_here npm run demo
 
-# Run the monitoring agent
-npm run simulate -- --cycles 10
+# Run the monitoring loop
+JUPITER_API_KEY=your_key_here npm run simulate -- --cycles 10
 ```
 
 ## Modes
 
 ```bash
-# Monitor only — watch and report, no actions
+# Just watch and report
 npm run monitor
 
-# Simulate — generate hedge plans without executing
+# Generate hedge plans without executing
 npm run simulate
 
-# Full agent (requires wallet)
-WALLET_ADDRESS=<your-wallet> npm start -- --mode live
+# Actually trade (needs wallet)
+WALLET_ADDRESS=<pubkey> npm start -- --mode live
 ```
 
-## Configuration
+## Config
 
-Set via environment variables or `.env` file:
+Set via env vars or `.env`:
 
 ```env
-JUPITER_API_KEY=jup_xxx         # From developers.jup.ag
-WALLET_ADDRESS=<pubkey>          # For portfolio tracking
-WALLET_PRIVATE_KEY=<base58>      # For live trading only
-ANTHROPIC_API_KEY=sk-ant-xxx     # Optional: AI-enhanced analysis
+JUPITER_API_KEY=jup_xxx         # from developers.jup.ag
+WALLET_ADDRESS=<pubkey>          # for portfolio tracking
+WALLET_PRIVATE_KEY=<base58>      # live trading only
 ```
 
-## Project Structure
+## Project structure
 
 ```
 src/
 ├── config.ts              # API keys, endpoints, thresholds
-├── index.ts               # CLI entry point with monitoring loop
-├── demo.ts                # Single-cycle demo runner
+├── index.ts               # CLI entry point
+├── demo.ts                # Single-cycle demo
 ├── apis/
-│   ├── price.ts           # Price API + price tracker with volatility calc
-│   ├── tokens.ts          # Tokens API + organic activity analyzer
+│   ├── price.ts           # Price API + tracker with volatility calc
+│   ├── tokens.ts          # Tokens API + organic activity analysis
 │   ├── swap.ts            # Swap V2 order/build/execute
 │   ├── trigger.ts         # Trigger API auth + limit orders + OCO
-│   └── portfolio.ts       # Portfolio position tracking
+│   └── portfolio.ts       # Portfolio positions
 └── agent/
-    ├── strategy.ts        # Hedge strategy engine (5 escalation levels)
-    └── pulse.ts           # Main agent orchestration loop
-```
-
-## Demo Output
-
-```
-╔══════════════════════════════════════════════════╗
-║        JUPITER PULSE — DEMO ANALYSIS            ║
-╚══════════════════════════════════════════════════╝
-
-📊 Step 1: Fetching live prices via Jupiter Price API...
-  SOL    $     81.852150  24h: -0.51%  Liq: $672.9M
-  USDC   $      0.999762  24h: -0.01%  Liq: $482.1M
-  JUP    $      0.162600  24h: +0.80%  Liq: $3.2M
-
-🔍 Step 2: Analyzing organic trading activity via Tokens API...
-  SOL:
-    Organic sell ratio: 0.1%
-    Dump signal:        ✅ NO (low)
-
-═══ JUPITER PULSE — HEDGE ACTION PLAN ═══
-✅ HOLDING: 5 positions stable
-
-💱 Step 4: Swap V2 API — sample hedge quote...
-  Swap 0.01 SOL → 0.8185 USDC
-  Route: BisonFi → PancakeSwap
-  Price Impact: -0.00025%
-  ✅ Transaction ready for signing (demo mode)
+    ├── strategy.ts        # Hedge strategy (5 escalation levels)
+    └── pulse.ts           # Main agent loop
 ```
 
 ## DX Report
 
-See [DX-REPORT.md](./DX-REPORT.md) for a detailed developer experience report covering onboarding, bugs found, API friction, AI stack feedback, and platform improvement suggestions.
-
-## Built With
-
-- [Jupiter Developer Platform](https://developers.jup.ag) — APIs and developer tools
-- [Jupiter Agent Skills](https://github.com/jup-ag/agent-skills) — AI coding agent context
-- [Jupiter CLI](https://www.npmjs.com/package/@jup-ag/cli) — Terminal interface
-- TypeScript + Node.js
-
-## License
-
-MIT
+See [DX-REPORT.md](./DX-REPORT.md) for my developer experience report — bugs found, what worked, what didn't, and how I'd improve the platform.
